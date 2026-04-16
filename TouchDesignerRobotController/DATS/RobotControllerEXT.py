@@ -1,500 +1,446 @@
 import math
 import time
-from multiprocessing.util import debug
 
 
 class RobotControllerEXT:
+    """
+    Owns all motion logic for 6 robot arms — behaviors, blending, fading, and
+    applying states to individual RobotEXT instances each frame.
+
+    Adding a new behavior (e.g. 'quaternion') requires exactly three steps:
+      1. Add its default parameters to BEHAVIOR_DEFAULTS below.
+      2. Implement a _<name>(self, dt) method that returns a states list.
+      3. Register it in self._behavior_fns inside __init__.
+    """
+
+    # -------------------------
+    # Behavior default parameters
+    # Each key maps to the parameters used by that behavior's compute method.
+    # Weights live separately in self.weights — they are NOT stored here.
+    # -------------------------
+
+    BEHAVIOR_DEFAULTS = {
+        'sine': {
+            'theta_velocity': 30.0,   # deg/s constant rotation speed
+            'frequency_phi':   0.5,   # Hz
+            'phase_shift':     0.0,   # rad offset between robots (phi)
+            'phase_theta':     0.0,   # deg offset between robots (theta)
+            'bias_phi':       90.0,   # deg — phi rest position
+            'amplitude_phi':  30.0,   # deg — phi oscillation amplitude
+        },
+        'wave': {
+            'frequency_theta': 1.0,
+            'frequency_phi':   1.0,
+            'phase_shift':     0.0,
+            'bias_theta':    180.0,
+            'bias_phi':       90.0,
+            'amplitude_theta': 45.0,
+            'amplitude_phi':   30.0,
+        },
+        'noise': {
+            'frequency_theta': 3.0,
+            'frequency_phi':   3.0,
+            'phase_shift':     0.0,
+            'bias_theta':    180.0,
+            'bias_phi':       90.0,
+            'amplitude_theta': 10.0,
+            'amplitude_phi':   10.0,
+        },
+        # Step 1 — quaternion defaults:
+        # quaternions is a list of (qx, qy, qz, qw) tuples, one per robot.
+        # Set via setQuaternion(robot_index, qx, qy, qz, qw) or setAllQuaternions([...]).
+        'quaternion': {
+            'quaternions': None,
+        },
+    }
+
     def __init__(self, ownerComp):
-        print("Running init")
         self.ownerComp = ownerComp
 
-        # Find all robots automatically
-        robots = []
+        self.robots = [ownerComp.parent().op(f'Robot{i}') for i in range(1, 7)]
+        self.robots = [r for r in self.robots if r]
 
-        for i in range(1,7):
-            r = ownerComp.parent().op(f'Robot{i}')
-            if r:
-                robots.append(r)  
+        self.time          = 0.0
+        self.previous_time = time.time()
 
-        self.robots =  robots
-        # Time
-        self.time = 0.0
-        self.previous_time = time.time()  # Track real clock time
+        # Behavior weights — independent from behavior parameters
+        self.weights = {name: 0.0 for name in self.BEHAVIOR_DEFAULTS}
+        self.weights['sine'] = 1.0
 
-        # Behaviors
-        self.behaviors = {
-            'sine': {
-                'weight': 1.0,
-                'theta_velocity': 30.0,
-                'frequency_theta': 1.0,
-                'frequency_phi': 0.5,
-                'phase_shift': 0.0,
-                'phase_theta': 0.0,
-                'bias_phi': 90.0,
-                'amplitude_theta': 0.0,
-                'amplitude_phi': 30.0
-            },
-            'wave': {
-                'weight': 0.0,
-                'frequency_theta': 1.0,
-                'frequency_phi': 1.0,
-                'phase_shift': 0.0,
-                'bias_theta': 180.0,
-                'bias_phi': 90.0,
-                'amplitude_theta': 45.0,
-                'amplitude_phi': 30.0
-            },
-            'noise': {
-                'weight': 0.0,
-                'frequency_theta': 3.0,
-                'frequency_phi': 3.0,
-                'phase_shift': 0.0,
-                'bias_theta': 180.0,
-                'bias_phi': 90.0,
-                'amplitude_theta': 10.0,
-                'amplitude_phi': 10.0
-            }
-        }
-
-        self.smoothed_behaviors = {name: values.copy() for name, values in self.behaviors.items()}
+        # Target parameter values (what the user sets)
+        self.behaviors = {name: dict(defaults) for name, defaults in self.BEHAVIOR_DEFAULTS.items()}
+        # Smoothed parameter values (lag toward targets — what behaviors actually read)
+        self.smoothed_params = {name: dict(defaults) for name, defaults in self.BEHAVIOR_DEFAULTS.items()}
         self.parameter_smoothing_speed = 6.0
 
-        # Fade system
-        self.fade = None
+        # Per-robot phase accumulators for stateful behaviors
+        self.sine_theta_positions = [0.0] * len(self.robots)
+        self.phase_phi            = [0.0] * len(self.robots)
+        self.theta_directions     = [1]   * len(self.robots)
+
+        # Fade / pause state
+        self.fade         = None
         self.faded_states = None
-        self.last_states = None
-        self.paused = False
-        self.sine_theta_positions = [0.0 for _ in self.robots]
-        self.phase_phi = [0.0 for _ in self.robots]
-        self.theta_directions = [1 for _ in self.robots]
-        
+        self.last_states  = None
+        self.paused       = False
+
+        # Step 3 — behavior dispatch table.
+        # Register new behaviors here alongside steps 1 and 2.
+        self._behavior_fns = {
+            'sine':       self._sine,
+            'wave':       self._wave,
+            'noise':      self._noise,
+            'quaternion': self._quaternion,
+        }
 
     # -------------------------
-    # Utility Functions
+    # Update loop
     # -------------------------
 
-    @staticmethod
-    def _normalizeAngle(angle, wrap=360.0):
-        """Normalize an angle to [0, wrap)."""
-        return angle % wrap
-
-    # -------------------------
-    # Easing Functions
-    # -------------------------
-
-    @staticmethod
-    def _easeInOutCubic(t):
-        """Smooth ease-in-out cubic easing function (0 to 1)"""
-        if t < 0.5:
-            return 4 * t * t * t
-        else:
-            t = 2 * t - 2
-            return 0.5 * t * t * t + 1
-
-    # -------------------------
-    # Update Loop
-    # -------------------------
-
-    def ExposedMethod(self):
-        # This method can be called externally
-        print('ExposedMethod has been called !')
-        pass
-        
     def Update(self):
-        # Calculate real delta time using clock
         current_time = time.time()
         dt = current_time - self.previous_time
         self.previous_time = current_time
-        
         self.time += dt
 
         if self.paused and self.last_states:
             self._applyStates(self.last_states, dt)
             return
 
-        # Handle fades
         self._updateFade(dt)
         self._smoothBehaviorParameters(dt)
 
-        # Collect blended state
-        final_states = None
+        final_states = self._blendAllBehaviors(dt)
 
-        for name, b in self.behaviors.items():
-            w = b['weight']
-            if w <= 0:
-                continue
-
-            states = self._runBehavior(name, dt)
-
-            if final_states is None:
-                final_states = states
-            else:
-                final_states = self._blendStates(final_states, states, w)
-
-        # Override with faded states if fading
+        # Faded states override blended states while a fade is in progress
         if self.fade and self.faded_states:
             final_states = self.faded_states
 
-        # Apply result
         if final_states:
             self._applyStates(final_states, dt)
+
+    def _blendAllBehaviors(self, dt):
+        """Normalized weighted blend across all active (weight > 0) behaviors."""
+        active = [(name, self.weights[name])
+                  for name in self._behavior_fns
+                  if self.weights.get(name, 0.0) > 0.0]
+        if not active:
+            return None
+
+        total_weight = sum(w for _, w in active)
+        if total_weight == 0.0:
+            return None
+
+        final_states = None
+        for name, w in active:
+            states = self._behavior_fns[name](dt)
+            if states is None:
+                continue
+            nw = w / total_weight  # normalized so all weights sum to 1
+            if final_states is None:
+                final_states = [
+                    {'theta': s['theta'] * nw,
+                     'phi':   s['phi']   * nw,
+                     'led':   [c * nw for c in s['led']]}
+                    for s in states
+                ]
+            else:
+                for fs, s in zip(final_states, states):
+                    fs['theta'] += s['theta'] * nw
+                    fs['phi']   += s['phi']   * nw
+                    for j in range(3):
+                        fs['led'][j] += s['led'][j] * nw
+
+        return final_states
 
     # -------------------------
     # Behaviors
     # -------------------------
-
-    def _runBehavior(self, name, dt):
-        if name == 'sine':
-            return self._sine(dt)
-
-        elif name == 'wave':
-            return self._wave()
-
-        elif name == 'noise':
-            return self._noise()
-
-        return None
+    # Each behavior has signature: (self, dt) -> list[state_dict] | None
+    # state_dict: {'theta': float, 'phi': float, 'led': [r, g, b]}
+    #
+    # Step 2 — implement new behaviors here.
 
     def _sine(self, dt):
+        """Theta rotates at constant velocity; phi oscillates sinusoidally per robot."""
+        p = self.smoothed_params['sine']
         states = []
-        sine_params = self.smoothed_behaviors['sine']
-        theta_velocity = sine_params['theta_velocity']
-        freq_phi = sine_params['frequency_phi']
-        phase_shift = sine_params['phase_shift']
-        phase_theta = sine_params['phase_theta']
-        bias_phi = sine_params['bias_phi']
-        amplitude_phi = sine_params['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            # Accumulate phase for phi
-            self.phase_phi[i] = (self.phase_phi[i] + 2 * math.pi * freq_phi * dt) % (2 * math.pi)
-            phase = i * phase_shift
-            self.sine_theta_positions[i] = (self.sine_theta_positions[i] + theta_velocity * dt) % 360.0
-            theta = self._normalizeAngle(self.sine_theta_positions[i] + i * phase_theta)
-            phi = math.sin(self.phase_phi[i] + phase) * amplitude_phi + bias_phi
-            
-            states.append({
-                'theta': theta,
-                'phi': phi,
-                'led': [1, 1, 1]
-            })
+        for i, _ in enumerate(self.robots):
+            self.phase_phi[i] = (
+                self.phase_phi[i] + 2 * math.pi * p['frequency_phi'] * dt
+            ) % (2 * math.pi)
+            self.sine_theta_positions[i] = (
+                self.sine_theta_positions[i] + p['theta_velocity'] * dt
+            ) % 360.0
 
+            theta = (self.sine_theta_positions[i] + i * p['phase_theta']) % 360.0
+            phi   = math.sin(self.phase_phi[i] + i * p['phase_shift']) * p['amplitude_phi'] + p['bias_phi']
+            states.append({'theta': theta, 'phi': phi, 'led': [1.0, 1.0, 1.0]})
         return states
 
-    def _wave(self):
+    def _wave(self, dt):
+        """Both theta and phi oscillate sinusoidally using absolute time."""
+        p = self.smoothed_params['wave']
         states = []
-        wave_params = self.smoothed_behaviors['wave']
-        freq_theta = wave_params['frequency_theta']
-        freq_phi = wave_params['frequency_phi']
-        phase_shift = wave_params['phase_shift']
-        bias_theta = wave_params['bias_theta']
-        bias_phi = wave_params['bias_phi']
-        amplitude_theta = wave_params['amplitude_theta']
-        amplitude_phi = wave_params['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            phase = i * phase_shift
-            theta = math.sin(self.time * freq_theta + i * 0.5 + phase) * amplitude_theta + bias_theta
-            phi = math.sin(self.time * freq_phi + i * 0.5 + phase) * amplitude_phi + bias_phi
-
-            states.append({
-                'theta': self._normalizeAngle(theta),
-                'phi': self._normalizeAngle(phi),
-                'led': [0, 0, 1]
-            })
-
+        for i, _ in enumerate(self.robots):
+            phase = i * p['phase_shift']
+            theta = math.sin(self.time * p['frequency_theta'] + i * 0.5 + phase) * p['amplitude_theta'] + p['bias_theta']
+            phi   = math.sin(self.time * p['frequency_phi']   + i * 0.5 + phase) * p['amplitude_phi']   + p['bias_phi']
+            states.append({'theta': theta % 360.0, 'phi': phi, 'led': [0.0, 0.0, 1.0]})
         return states
 
-    def _noise(self):
+    def _noise(self, dt):
+        """Higher-frequency wave variant with smaller amplitude."""
+        p = self.smoothed_params['noise']
         states = []
-        noise_params = self.smoothed_behaviors['noise']
-        freq_theta = noise_params['frequency_theta']
-        freq_phi = noise_params['frequency_phi']
-        phase_shift = noise_params['phase_shift']
-        bias_theta = noise_params['bias_theta']
-        bias_phi = noise_params['bias_phi']
-        amplitude_theta = noise_params['amplitude_theta']
-        amplitude_phi = noise_params['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            phase = i * phase_shift
-            theta = math.sin(self.time * freq_theta + i + phase) * amplitude_theta + bias_theta
-            phi = math.sin(self.time * freq_phi + i + phase) * amplitude_phi + bias_phi
-
-            states.append({
-                'theta': self._normalizeAngle(theta),
-                'phi': self._normalizeAngle(phi),
-                'led': [1, 0, 0]
-            })
-
+        for i, _ in enumerate(self.robots):
+            phase = i * p['phase_shift']
+            theta = math.sin(self.time * p['frequency_theta'] + i + phase) * p['amplitude_theta'] + p['bias_theta']
+            phi   = math.sin(self.time * p['frequency_phi']   + i + phase) * p['amplitude_phi']   + p['bias_phi']
+            states.append({'theta': theta % 360.0, 'phi': phi, 'led': [1.0, 0.0, 0.0]})
         return states
+
+    def _quaternion(self, dt):
+        """
+        Drive each robot's orientation from a per-robot unit quaternion.
+
+        Returns None if no quaternion data has been set (behavior is silently inactive).
+        Feed data each frame via setQuaternion() or setAllQuaternions() before calling Update().
+        """
+        quats = self.behaviors['quaternion'].get('quaternions')
+        if not quats or len(quats) < len(self.robots):
+            return None
+
+        states = []
+        for i, _ in enumerate(self.robots):
+            qx, qy, qz, qw = quats[i]
+            theta, phi = self._quaternionToSpherical(qx, qy, qz, qw)
+            states.append({'theta': theta, 'phi': phi, 'led': [0.0, 1.0, 1.0]})
+        return states
+
+    @staticmethod
+    def _quaternionToSpherical(qx, qy, qz, qw):
+        """
+        Convert a unit quaternion to spherical coordinates (degrees).
+
+        Extracts the direction of the rotated Z-axis (forward vector).
+          theta — azimuth in [0, 360)
+          phi   — elevation in [-90, 90]  (maps to robot phi range)
+        """
+        # Rotate forward vector (0, 0, 1) by the quaternion
+        fx = 2.0 * (qx * qz + qy * qw)
+        fy = 2.0 * (qy * qz - qx * qw)
+        fz = 1.0 - 2.0 * (qx * qx + qy * qy)
+
+        theta = math.degrees(math.atan2(fx, fz)) % 360.0
+        phi   = math.degrees(math.asin(max(-1.0, min(1.0, fy))))
+        return theta, phi
+
+    # -------------------------
+    # Interpolation helpers
+    # -------------------------
+
+    @staticmethod
+    def _easeInOutCubic(t):
+        if t < 0.5:
+            return 4 * t * t * t
+        t2 = 2 * t - 2
+        return 0.5 * t2 * t2 * t2 + 1
+
+    @staticmethod
+    def _shortestThetaDelta(target, source, wrap=360.0):
+        return ((target - source + wrap * 0.5) % wrap) - wrap * 0.5
 
     def _interpolateStates(self, start_states, end_states, t):
-        interpolated = []
+        result = []
         for s, e in zip(start_states, end_states):
-            # Interpolate theta with angle wrapping
-            theta_diff = self._normalizeAngle(e['theta'] - s['theta'])
-            if theta_diff > 180:
-                theta_diff -= 360
-            theta = self._normalizeAngle(s['theta'] + theta_diff * t)
-            
-            # Interpolate phi with angle wrapping
-            phi_diff = self._normalizeAngle(e['phi'] - s['phi'])
-            if phi_diff > 180:
-                phi_diff -= 360
-            phi = self._normalizeAngle(s['phi'] + phi_diff * t)
-            
-            # Interpolate LED
-            led = [
-                s['led'][0] + (e['led'][0] - s['led'][0]) * t,
-                s['led'][1] + (e['led'][1] - s['led'][1]) * t,
-                s['led'][2] + (e['led'][2] - s['led'][2]) * t,
-            ]
-            interpolated.append({'theta': theta, 'phi': phi, 'led': led})
-        return interpolated
+            td    = self._shortestThetaDelta(e['theta'], s['theta'])
+            theta = (s['theta'] + td * t) % 360.0
+            phi   = s['phi'] + (e['phi'] - s['phi']) * t
+            led   = [s['led'][j] + (e['led'][j] - s['led'][j]) * t for j in range(3)]
+            result.append({'theta': theta, 'phi': phi, 'led': led})
+        return result
+
+    def _smoothBehaviorParameters(self, dt):
+        if dt <= 0:
+            return
+        alpha = 1.0 - math.exp(-self.parameter_smoothing_speed * dt)
+        for name, target in self.behaviors.items():
+            current = self.smoothed_params[name]
+            for key, tv in target.items():
+                if isinstance(tv, (int, float)):
+                    cv = current.get(key, tv)
+                    current[key] = cv + (tv - cv) * alpha
+                else:
+                    current[key] = tv  # non-numeric params pass through unchanged
 
     # -------------------------
-    # Blending
-    # -------------------------
-
-    def _blendStates(self, A, B, weight):
-        blended = []
-
-        for a, b in zip(A, B):
-            blended.append({
-                'theta': a['theta'] * (1 - weight) + b['theta'] * weight,
-                'phi': a['phi'] * (1 - weight) + b['phi'] * weight,
-                'led': [
-                    a['led'][0] * (1 - weight) + b['led'][0] * weight,
-                    a['led'][1] * (1 - weight) + b['led'][1] * weight,
-                    a['led'][2] * (1 - weight) + b['led'][2] * weight,
-                ]
-            })
-
-        return blended
-
-    # -------------------------
-    # Apply to Robots
+    # Apply to robots
     # -------------------------
 
     def _applyStates(self, states, dt):
         for i, (r, s) in enumerate(zip(self.robots, states)):
-            theta = self._normalizeAngle(s['theta'] * self.theta_directions[i])
+            theta = (s['theta'] * self.theta_directions[i]) % 360.0
             r.SetState(theta, s['phi'], s['led'], dt)
             r.PushToCHOP()
-        self.last_states = states 
+        self.last_states = states
+
+    def _getCurrentStates(self):
+        return self.last_states or [
+            {'theta': 0.0, 'phi': 90.0, 'led': [0.0, 0.0, 0.0]}
+            for _ in self.robots
+        ]
 
     # -------------------------
-    # Fade System
+    # Fade system
     # -------------------------
 
     def fadeTo(self, target, duration=2.0):
-        start_states = self._getCurrentStates()
-        end_states = self._computeTargetStates(target, duration)
+        if target not in self._behavior_fns:
+            return
         self.fade = {
-            'start_states': start_states,
-            'end_states': end_states,
-            'time': 0.0,
-            'duration': duration,
-            'target': target
+            'start_states': self._getCurrentStates(),
+            'end_states':   self._computeTargetStates(target, duration),
+            'time':         0.0,
+            'duration':     duration,
+            'target':       target,
         }
 
     def _updateFade(self, dt):
         if not self.fade:
             return
-
         f = self.fade
         f['time'] += dt
-
         t = min(f['time'] / f['duration'], 1.0)
-        eased_t = self._easeInOutCubic(t)
-
         if t >= 1.0:
-            # End fade, switch to target
             self.zeroAll()
-            self.behaviors[f['target']]['weight'] = 1.0
-            self.fade = None
-            self.faded_states = None
+            self.weights[f['target']] = 1.0
+            self.fade = self.faded_states = None
         else:
-            self.faded_states = self._interpolateStates(f['start_states'], f['end_states'], eased_t)
-
-    def _smoothBehaviorParameters(self, dt):
-        if dt <= 0:
-            return
-
-        alpha = 1.0 - math.exp(-self.parameter_smoothing_speed * dt)
-        for name, target_params in self.behaviors.items():
-            current_params = self.smoothed_behaviors[name]
-            for key, target_value in target_params.items():
-                if key == 'weight':
-                    current_params[key] = target_value
-                    continue
-
-                if isinstance(target_value, (int, float)):
-                    current_value = current_params.get(key, target_value)
-                    current_params[key] = current_value + (target_value - current_value) * alpha
-                else:
-                    current_params[key] = target_value
-
-    def _getWeights(self):
-        return {k: v['weight'] for k, v in self.behaviors.items()}
-
-    def _getCurrentStates(self):
-        return self.last_states if self.last_states else [{'theta': 0.0, 'phi': 90.0, 'led': [0, 0, 0]} for _ in self.robots]
+            self.faded_states = self._interpolateStates(
+                f['start_states'], f['end_states'], self._easeInOutCubic(t)
+            )
 
     def _computeTargetStates(self, target, duration):
+        """
+        Predict where a behavior will be `duration` seconds from now.
+        Used to set the fade end-point so the transition lands seamlessly.
+        """
         if target == 'sine':
             return self._computeSineStates(duration)
-        elif target == 'wave':
-            return self._computeWaveStates(duration)
-        elif target == 'noise':
-            return self._computeNoiseStates(duration)
-        return None
+        # Stateless behaviors: just sample them at current time
+        fn = self._behavior_fns.get(target)
+        if fn:
+            result = fn(0.0)
+            if result:
+                return result
+        return self._getCurrentStates()
 
     def _computeSineStates(self, duration=0.0):
+        """Predict sine positions after `duration` seconds (for fade targeting)."""
+        p = self.behaviors['sine']
         states = []
-        theta_velocity = self.behaviors['sine']['theta_velocity']
-        freq_phi = self.behaviors['sine']['frequency_phi']
-        phase_shift = self.behaviors['sine']['phase_shift']
-        phase_theta = self.behaviors['sine']['phase_theta']
-        bias_phi = self.behaviors['sine']['bias_phi']
-        amplitude_phi = self.behaviors['sine']['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            phase = i * phase_shift
-            # Advance theta by duration
-            theta = self._normalizeAngle((self.sine_theta_positions[i] + theta_velocity * duration) + i * phase_theta)
-            phi = math.sin((self.time + duration) * freq_phi + phase) * amplitude_phi + bias_phi
-            
-            states.append({
-                'theta': theta,
-                'phi': phi,
-                'led': [1, 1, 1]
-            })
-
-        return states
-
-    def _computeWaveStates(self, duration=0.0):
-        states = []
-        freq_theta = self.behaviors['wave']['frequency_theta']
-        freq_phi = self.behaviors['wave']['frequency_phi']
-        phase_shift = self.behaviors['wave']['phase_shift']
-        bias_theta = self.behaviors['wave']['bias_theta']
-        bias_phi = self.behaviors['wave']['bias_phi']
-        amplitude_theta = self.behaviors['wave']['amplitude_theta']
-        amplitude_phi = self.behaviors['wave']['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            phase = i * phase_shift
-            theta = math.sin((self.time + duration) * freq_theta + i * 0.5 + phase) * amplitude_theta + bias_theta
-            phi = math.sin((self.time + duration) * freq_phi + i * 0.5 + phase) * amplitude_phi + bias_phi
-
-            states.append({
-                'theta': self._normalizeAngle(theta),
-                'phi': self._normalizeAngle(phi),
-                'led': [0, 0, 1]
-            })
-
-        return states
-
-    def _computeNoiseStates(self, duration=0.0):
-        states = []
-        freq_theta = self.behaviors['noise']['frequency_theta']
-        freq_phi = self.behaviors['noise']['frequency_phi']
-        phase_shift = self.behaviors['noise']['phase_shift']
-        bias_theta = self.behaviors['noise']['bias_theta']
-        bias_phi = self.behaviors['noise']['bias_phi']
-        amplitude_theta = self.behaviors['noise']['amplitude_theta']
-        amplitude_phi = self.behaviors['noise']['amplitude_phi']
-        
-        for i, r in enumerate(self.robots):
-            phase = i * phase_shift
-            theta = math.sin((self.time + duration) * freq_theta + i + phase) * amplitude_theta + bias_theta
-            phi = math.sin((self.time + duration) * freq_phi + i + phase) * amplitude_phi + bias_phi
-
-            states.append({
-                'theta': self._normalizeAngle(theta),
-                'phi': self._normalizeAngle(phi),
-                'led': [1, 0, 0]
-            })
-
+        for i, _ in enumerate(self.robots):
+            theta = (
+                (self.sine_theta_positions[i] + p['theta_velocity'] * duration)
+                + i * p['phase_theta']
+            ) % 360.0
+            phi = (
+                math.sin((self.time + duration) * p['frequency_phi'] + i * p['phase_shift'])
+                * p['amplitude_phi'] + p['bias_phi']
+            )
+            states.append({'theta': theta, 'phi': phi, 'led': [1.0, 1.0, 1.0]})
         return states
 
     # -------------------------
-    # Direct Controls
+    # Parameter controls
     # -------------------------
 
     def setWeight(self, name, weight):
-        if name in self.behaviors:
-            self.behaviors[name]['weight'] = weight
+        if name in self.weights:
+            self.weights[name] = weight
+
+    def setParam(self, behavior, key, value):
+        """Generic parameter setter. e.g. setParam('sine', 'theta_velocity', 45.0)"""
+        if behavior in self.behaviors and key in self.behaviors[behavior]:
+            self.behaviors[behavior][key] = value
 
     def setFrequency(self, name, frequency_theta=None, frequency_phi=None):
-        if name in self.behaviors:
-            if frequency_theta is not None:
-                self.behaviors[name]['frequency_theta'] = frequency_theta
-            if frequency_phi is not None:
-                self.behaviors[name]['frequency_phi'] = frequency_phi
+        if name not in self.behaviors:
+            return
+        p = self.behaviors[name]
+        if frequency_theta is not None and 'frequency_theta' in p:
+            p['frequency_theta'] = frequency_theta
+        if frequency_phi is not None and 'frequency_phi' in p:
+            p['frequency_phi'] = frequency_phi
 
     def setThetaVelocity(self, velocity):
-        if 'sine' in self.behaviors:
-            self.behaviors['sine']['theta_velocity'] = velocity
+        self.behaviors['sine']['theta_velocity'] = velocity
 
     def setPhaseShift(self, name, phase_shift):
         if name in self.behaviors:
             self.behaviors[name]['phase_shift'] = phase_shift
 
     def setBias(self, name, bias_theta=None, bias_phi=None):
-        if name in self.behaviors:
-            if bias_theta is not None:
-                key = 'phase_theta' if name == 'sine' else 'bias_theta'
-                self.behaviors[name][key] = bias_theta
-            if bias_phi is not None:
-                self.behaviors[name]['bias_phi'] = bias_phi
+        if name not in self.behaviors:
+            return
+        p = self.behaviors[name]
+        if bias_theta is not None:
+            key = 'phase_theta' if name == 'sine' else 'bias_theta'
+            if key in p:
+                p[key] = bias_theta
+        if bias_phi is not None and 'bias_phi' in p:
+            p['bias_phi'] = bias_phi
+
+    def setQuaternion(self, robot_index, qx, qy, qz, qw):
+        """Set the driving quaternion for one robot (for the 'quaternion' behavior)."""
+        quats = self.behaviors['quaternion'].get('quaternions')
+        if quats is None:
+            quats = [(0.0, 0.0, 0.0, 1.0)] * len(self.robots)
+            self.behaviors['quaternion']['quaternions'] = quats
+        if 0 <= robot_index < len(quats):
+            quats[robot_index] = (qx, qy, qz, qw)
+
+    def setAllQuaternions(self, quaternion_list):
+        """Set quaternions for all robots at once. quaternion_list: [(qx,qy,qz,qw), ...]"""
+        self.behaviors['quaternion']['quaternions'] = list(quaternion_list)
 
     def zeroAll(self):
-        for b in self.behaviors.values():
-            b['weight'] = 0.0
+        for name in self.weights:
+            self.weights[name] = 0.0
+
+    # -------------------------
+    # Playback controls
+    # -------------------------
 
     def stop(self):
-        """Pause motion without changing behavior weights."""
-        self.paused = True
-        self.fade = None
+        """Pause motion, holding the current position."""
+        self.paused       = True
+        self.fade         = None
         self.faded_states = None
-        self.last_states = self._getCurrentStates()
+        self.last_states  = self._getCurrentStates()
 
     def resume(self):
-        """Resume motion using the current behavior weights."""
+        """Resume motion using current behavior weights."""
         self.paused = False
 
     def servo_min(self):
-        """Set all servo motors to their minimum position (0 degrees)."""
-        states = []
-        for r in self.robots:
-            states.append({
-                'theta': 0.0,
-                'phi': -135.0,
-                'led': [0, 0, 0]
-            })
+        """Move all robots to their minimum position (phi = -135°)."""
+        states = [{'theta': 0.0, 'phi': -135.0, 'led': [0.0, 0.0, 0.0]} for _ in self.robots]
         self._applyStates(states, 0.0)
-        self.paused = True
-        self.fade = None
+        self.paused       = True
+        self.fade         = None
         self.faded_states = None
-        self.last_states = states
+        self.last_states  = states
 
     def servo_max(self):
-        """Set all servo motors to their maximum position (180 degrees)."""
-        states = []
-        for r in self.robots:
-            states.append({
-                'theta': 0.0,
-                'phi': 0.0,
-                'led': [0, 0, 0]
-            })
+        """Move all robots to phi = 0° (pointing along Y+)."""
+        states = [{'theta': 0.0, 'phi': 0.0, 'led': [0.0, 0.0, 0.0]} for _ in self.robots]
         self._applyStates(states, 0.0)
-        self.paused = True
-        self.fade = None
+        self.paused       = True
+        self.fade         = None
         self.faded_states = None
-        self.last_states = states
+        self.last_states  = states
 
     # -------------------------
     # Output
@@ -502,3 +448,6 @@ class RobotControllerEXT:
 
     def GetAllStates(self):
         return [r.GetState() for r in self.robots]
+
+    def ExposedMethod(self):
+        print('ExposedMethod called!')

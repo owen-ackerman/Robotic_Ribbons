@@ -1,7 +1,7 @@
 #include <AccelStepper.h>
 #include <elapsedMillis.h>
 #include <Servo.h>
-//#include <algorithm>
+#include <algorithm>
 
 // ── Pin Definitions ──────────────────────────────────────────────────────────
 // Stepper pins: {stepPin, dirPin} for each of the 6 steppers
@@ -29,12 +29,6 @@ AccelStepper steppers[6] = {
 
 Servo servos[6];
 elapsedMillis printTime;
-bool allTrue(bool arr[], int len) {
-    for (int i = 0; i < len; i++) {
-        if (!arr[i]) return false;
-    }
-    return true;
-}
 
 // ── Homing ───────────────────────────────────────────────────────────────────
 void homeAllSteppers() {
@@ -52,8 +46,9 @@ void homeAllSteppers() {
   }
 
   while (!allHomed) {
-    allHomed = allTrue(homed, 6);
-   
+    std::all_of(homed, homed+6, [](bool x) { return x == true; })?
+        allHomed = true : 
+        allHomed = false; 
 
     for (int i = 0; i < 6; i++) {
       if (homed[i]) continue;
