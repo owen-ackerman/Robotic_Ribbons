@@ -24,8 +24,8 @@
 #define TARGET_UNIVERSE 0
 
 // Static IP — set Network Address to this in TouchDesigner
-IPAddress local_IP(169, 254, 212, 50);
-IPAddress gateway(169, 254, 212, 200);
+IPAddress local_IP(169, 254, 164, 50);
+IPAddress gateway(169, 254, 164, 11);
 IPAddress subnet(255, 255, 0, 0);
 
 NetworkUDP udp;
@@ -38,6 +38,7 @@ void sendDMXFrame(uint8_t* data, int count) {
   dmxSend.transmit();
   for (int i = 1; i < count; i++) {
     dmxSend.write(data[i], i);
+    //Serial.println(data[i]);
   }
 }
 

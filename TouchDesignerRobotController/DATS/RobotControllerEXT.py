@@ -1,4 +1,4 @@
-import math
+﻿import math
 import time
 
 
@@ -25,7 +25,7 @@ class RobotControllerEXT:
             'frequency_phi':   0.5,   # Hz
             'phase_shift':     0.0,   # rad offset between robots (phi)
             'phase_theta':     0.0,   # deg offset between robots (theta)
-            'bias_phi':       90.0,   # deg — phi rest position
+            'bias_phi':       -90.0,   # deg — phi rest position
             'amplitude_phi':  30.0,   # deg — phi oscillation amplitude
         },
         'wave': {
@@ -45,6 +45,12 @@ class RobotControllerEXT:
             'bias_phi':       90.0,
             'amplitude_theta': 10.0,
             'amplitude_phi':   10.0,
+        },
+        'circular': {
+            'angular_speed': 30.0,    # deg/s angular rotation speed
+            'tilt_angle':    45.0,    # deg from Y axis (min 45)
+            'azimuth_offset': 0.0,    # deg in XZ plane (0-360)
+            'phase_shift':   0.0,     # rad offset between robots
         },
         # Step 1 — quaternion defaults:
         # quaternions is a list of (qx, qy, qz, qw) tuples, one per robot.
@@ -77,6 +83,7 @@ class RobotControllerEXT:
         self.sine_theta_positions = [0.0] * len(self.robots)
         self.phase_phi            = [0.0] * len(self.robots)
         self.theta_directions     = [1]   * len(self.robots)
+        self.circular_angles      = [0.0] * len(self.robots)
 
         # Fade / pause state
         self.fade         = None
@@ -90,6 +97,7 @@ class RobotControllerEXT:
             'sine':       self._sine,
             'wave':       self._wave,
             'noise':      self._noise,
+            'circular':   self._circular,
             'quaternion': self._quaternion,
         }
 
@@ -198,6 +206,18 @@ class RobotControllerEXT:
             theta = math.sin(self.time * p['frequency_theta'] + i + phase) * p['amplitude_theta'] + p['bias_theta']
             phi   = math.sin(self.time * p['frequency_phi']   + i + phase) * p['amplitude_phi']   + p['bias_phi']
             states.append({'theta': theta % 360.0, 'phi': phi, 'led': [1.0, 0.0, 0.0]})
+        return states
+
+    def _circular(self, dt):
+        """Circular motion in a vertical plane tilted from Y axis."""
+        p = self.smoothed_params['circular']
+        states = []
+        for i, _ in enumerate(self.robots):
+            self.circular_angles[i] += math.radians(p['angular_speed']) * dt
+            angle = self.circular_angles[i] + i * p['phase_shift']
+            theta = (p['azimuth_offset'] + 1.0 * math.cos(angle)) % 360.0
+            phi = p['tilt_angle'] + 1.0 * math.sin(angle)
+            states.append({'theta': theta, 'phi': phi, 'led': [0.5, 0.5, 0.5]})
         return states
 
     def _quaternion(self, dt):
@@ -328,6 +348,8 @@ class RobotControllerEXT:
         """
         if target == 'sine':
             return self._computeSineStates(duration)
+        if target == 'circular':
+            return self._computeCircularStates(duration)
         # Stateless behaviors: just sample them at current time
         fn = self._behavior_fns.get(target)
         if fn:
@@ -350,6 +372,17 @@ class RobotControllerEXT:
                 * p['amplitude_phi'] + p['bias_phi']
             )
             states.append({'theta': theta, 'phi': phi, 'led': [1.0, 1.0, 1.0]})
+        return states
+
+    def _computeCircularStates(self, duration=0.0):
+        """Predict circular positions after `duration` seconds (for fade targeting)."""
+        p = self.behaviors['circular']
+        states = []
+        for i, _ in enumerate(self.robots):
+            angle = self.circular_angles[i] + math.radians(p['angular_speed']) * duration + i * p['phase_shift']
+            theta = (p['azimuth_offset'] + 1.0 * math.cos(angle)) % 360.0
+            phi = p['tilt_angle'] + 1.0 * math.sin(angle)
+            states.append({'theta': theta, 'phi': phi, 'led': [0.5, 0.5, 0.5]})
         return states
 
     # -------------------------
@@ -391,6 +424,16 @@ class RobotControllerEXT:
                 p[key] = bias_theta
         if bias_phi is not None and 'bias_phi' in p:
             p['bias_phi'] = bias_phi
+
+    def setCircularSpeed(self, angular_speed):
+        self.behaviors['circular']['angular_speed'] = angular_speed
+
+    def setCircularTilt(self, tilt_angle):
+        if tilt_angle >= 45.0:
+            self.behaviors['circular']['tilt_angle'] = tilt_angle
+
+    def setCircularAzimuth(self, azimuth_offset):
+        self.behaviors['circular']['azimuth_offset'] = azimuth_offset % 360.0
 
     def setQuaternion(self, robot_index, qx, qy, qz, qw):
         """Set the driving quaternion for one robot (for the 'quaternion' behavior)."""
@@ -434,6 +477,15 @@ class RobotControllerEXT:
         self.last_states  = states
 
     def servo_max(self):
+        """Move all robots to phi = 0° (pointing along Y+)."""
+        states = [{'theta': 0.0, 'phi': 135.0, 'led': [0.0, 0.0, 0.0]} for _ in self.robots]
+        self._applyStates(states, 0.0)
+        self.paused       = True
+        self.fade         = None
+        self.faded_states = None
+        self.last_states  = states
+
+    def servo_zero(self):
         """Move all robots to phi = 0° (pointing along Y+)."""
         states = [{'theta': 0.0, 'phi': 0.0, 'led': [0.0, 0.0, 0.0]} for _ in self.robots]
         self._applyStates(states, 0.0)
