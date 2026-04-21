@@ -13,6 +13,7 @@ const int dirPins[6]  = {26, 27, 28, 29, 32, 31};
 // Limit switch pins for each of the 6 steppers
 const int homingPins[6] = {33, 37, 41, 45, 49, 53};  // swap for your actual pins
 
+bool printBool = true;
 // ── Homing Config ────────────────────────────────────────────────────────────
 #define HOMING_SPEED  500   // steps/sec — slow enough to not slam the switch
 #define HOMING_DIR   -1     // -1 or 1 depending on which direction homes
@@ -83,7 +84,7 @@ void homeAllSteppers() {
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(250000);
   while (!Serial);
 
   for (int i = 0; i < 6; i++) {
@@ -96,7 +97,7 @@ void setup() {
   Serial.println("Hello Serial Setup");
 
 
-  homeAllSteppers();
+  //homeAllSteppers();
 }
 
 // ── Loop ─────────────────────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ void loop() {
   // Serial packet parsing
   // Stepper packet: RobotNum, MotorNum(2), high, med, low, sign  → 6 bytes
   // Servo packet:   RobotNum, MotorNum(1), high, low             → 4 bytes
-  if (Serial.available() >= 4) {
+  while (Serial.available() >= 4) {
     int robotNum = Serial.read();  // 1–6
     int motorNum = Serial.read();  // 1 = servo, 2 = stepper
 
@@ -130,10 +131,12 @@ void loop() {
       if (sign == 1) stepperSPS = -stepperSPS;
 
       steppers[robotNum].setSpeed(stepperSPS);
-      Serial.print("Robot ");
-      Serial.print(robotNum + 1);
-      Serial.print(" | Stepper | SPS: ");
-      Serial.println(stepperSPS);
+      if (printBool) {
+        Serial.print("Robot ");
+        Serial.print(robotNum + 1);
+        Serial.print(" | Stepper | SPS: ");
+        Serial.println(stepperSPS);
+      }
 
     } else if (motorNum == 1) {
       // Servo — needs 2 more bytes
@@ -144,10 +147,13 @@ void loop() {
       int servoAngle = ((high << 8) | low) - 1;
 
       servos[robotNum].write(servoAngle);
+      
+      if (printBool) {
       Serial.print("Robot ");
       Serial.print(robotNum + 1);
       Serial.print(" | Servo | Angle: ");
       Serial.println(servoAngle);
+      }
     }
   }
 }
