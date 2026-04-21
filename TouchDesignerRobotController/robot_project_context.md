@@ -145,9 +145,67 @@ const2value = pulse_per_sec + 100000  # offset for serial communication
 ---
 
 ### `RobotControllerEXT` class (one instance in RobotController COMP)
-**Role:** Owns all motion logic — behaviors, blending, fading, and applying states to all robots.
+**Role:** Orchestrates motion for all 6 robots — manages behaviors, blending, fading, and state application.
 
 **Initialization:**
+- References 6 Robot COMPs: `/Robot1` to `/Robot6`
+- Tracks time and dt for frame-based updates
+- Maintains behavior weights (default: 'sine' = 1.0, others = 0.0)
+- Stores target parameters for each behavior (user-set values)
+- Stores smoothed parameters (lag-filtered toward targets for smooth transitions)
+- Per-robot accumulators for stateful behaviors (e.g., sine phase positions)
+- Fade state for smooth transitions between behaviors
+
+**Behaviors:** Predefined motion patterns, each returning a list of state dicts `{'theta': float, 'phi': float, 'led': [r,g,b]}` for all robots.
+
+- **'sine'**: Theta rotates at constant velocity; phi oscillates sinusoidally per robot with phase shifts.
+  - Parameters: `theta_velocity`, `frequency_phi`, `phase_shift`, `phase_theta`, `bias_phi`, `amplitude_phi`
+- **'wave'**: Both theta and phi oscillate sinusoidally using absolute time, with per-robot phase offsets.
+  - Parameters: `frequency_theta`, `frequency_phi`, `phase_shift`, `bias_theta`, `bias_phi`, `amplitude_theta`, `amplitude_phi`
+- **'noise'**: Higher-frequency wave variant with smaller amplitude (for subtle perturbations).
+  - Parameters: similar to 'wave' but with higher defaults
+- **'circular'**: Traces a vertical circle in a tilted plane, with per-robot phase shifts.
+  - Parameters: `angular_speed` (deg/s), `tilt_angle` (deg from Y, min 45), `azimuth_offset` (deg in XZ, 0-360), `phase_shift` (rad between robots)
+- **'quaternion'**: Drives each robot from a per-robot unit quaternion (e.g., for external tracking or IK).
+  - Parameters: `quaternions` — list of (qx, qy, qz, qw) tuples
+  - Converts quaternion to spherical coords via `_quaternionToSpherical()` (rotates Z-axis forward vector)
+
+**Behavior Blending:** 
+- Weights sum to 1.0 across active behaviors
+- States are linearly interpolated: `final_theta = sum(weight_i * theta_i)`
+- LED colors blend additively
+
+**Fading System:**
+- `fadeTo(target_behavior, duration)` initiates smooth transition
+- Predicts target states `duration` seconds ahead (for seamless landing)
+- Uses cubic ease-in-out interpolation
+- Overrides blended states during fade
+
+**Parameter Smoothing:**
+- Target parameters lag toward user-set values with exponential smoothing
+- `alpha = 1 - exp(-parameter_smoothing_speed * dt)` (default speed = 6.0)
+
+**Update Loop (`Update()`):**
+1. Compute dt from wall time
+2. Update fade progress
+3. Smooth behavior parameters
+4. Blend all active behaviors
+5. Apply final states to robots (via `RobotEXT.SetState()` and `PushToCHOP()`)
+
+**Control Methods:**
+- `setWeight(name, weight)` — adjust behavior weights
+- `setParam(behavior, key, value)` — set behavior parameters
+- `setThetaVelocity(v)`, `setFrequency(name, freq_theta, freq_phi)`, etc. — convenience setters
+- `setCircularSpeed(speed)`, `setCircularTilt(angle)`, `setCircularAzimuth(offset)` — for circular behavior
+- `setQuaternion(robot_index, qx,qy,qz,qw)` / `setAllQuaternions(list)` — for quaternion behavior
+- `fadeTo(target, duration)` — smooth transition to behavior
+- `stop()` / `resume()` — pause/resume motion
+- `servo_min()` / `servo_max()` / `servo_zero()` — move to limit positions
+- `zeroAll()` — zero all weights
+
+**Output:**
+- `GetAllStates()` — returns list of robot state dicts
+- States applied to robots each frame, driving CHOP outputs for serial/Art-Net transmission
 - Auto-discovers robots by looking for `Robot1`–`Robot6` as siblings: `ownerComp.parent().op(f'Robot{i}')`
 - Uses `time.time()` for real clock delta time (not TD timeline)
 
@@ -164,7 +222,9 @@ behaviors = {
                'amplitude_theta': 45.0, 'amplitude_phi': 30.0 },
     'noise': { 'weight': 0.0, 'frequency_theta': 3.0, 'frequency_phi': 3.0,
                'phase_shift': 0.0, 'bias_theta': 180.0, 'bias_phi': 90.0,
-               'amplitude_theta': 10.0, 'amplitude_phi': 10.0 }
+               'amplitude_theta': 10.0, 'amplitude_phi': 10.0 },
+    'circular': { 'weight': 0.0, 'angular_speed': 30.0, 'tilt_angle': 45.0,
+                  'azimuth_offset': 0.0, 'phase_shift': 0.0 }
 }
 ```
 

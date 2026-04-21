@@ -1,7 +1,7 @@
 #include <AccelStepper.h>
 #include <elapsedMillis.h>
 #include <Servo.h>
-//#include <algorithm>
+
 
 // ── Pin Definitions ──────────────────────────────────────────────────────────
 // Stepper pins: {stepPin, dirPin} for each of the 6 steppers
@@ -10,12 +10,11 @@ const int servoPins[6] = {2,  4,  6,  8,  10, 12};
 const int stepPins[6] = {3, 5, 7, 9, 11, 13};
 const int dirPins[6]  = {26, 27, 28, 29, 32, 31};
 
-// Limit switch pins for each of the 6 steppers
+// Limit switch pins for each of37 the 6 steppers
 const int homingPins[6] = {33, 37, 41, 45, 49, 53};  // swap for your actual pins
 
-bool printBool = true;
 // ── Homing Config ────────────────────────────────────────────────────────────
-#define HOMING_SPEED  500   // steps/sec — slow enough to not slam the switch
+#define HOMING_SPEED 2000   // steps/sec — slow enough to not slam the switch
 #define HOMING_DIR   -1     // -1 or 1 depending on which direction homes
 
 // ── Motor Objects ────────────────────────────────────────────────────────────
@@ -31,12 +30,10 @@ AccelStepper steppers[6] = {
 Servo servos[6];
 elapsedMillis printTime;
 bool allTrue(bool arr[], int len) {
-    for (int i = 0; i < len; i++) {
-        if (!arr[i]) return false;
-    }
-    return true;
+  for (int i = 0; i<len; i++) {
+    if (!arr[i]) return false;
+  } return true;
 }
-
 // ── Homing ───────────────────────────────────────────────────────────────────
 void homeAllSteppers() {
   Serial.println("Homing sequence started...");
@@ -54,7 +51,6 @@ void homeAllSteppers() {
 
   while (!allHomed) {
     allHomed = allTrue(homed, 6);
-   
 
     for (int i = 0; i < 6; i++) {
       if (homed[i]) continue;
@@ -75,7 +71,7 @@ void homeAllSteppers() {
       }
 
       prevState[i] = curState;
-      if (!homed[i]) allHomed = false;
+      //if (!homed[i]) allHomed = false;
     }
   }
 
@@ -97,63 +93,43 @@ void setup() {
   Serial.println("Hello Serial Setup");
 
 
-  //homeAllSteppers();
+  homeAllSteppers();
 }
-
-// ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
- // steppers[3].setSpeed(500);
-  // Run all steppers on every loop — this must not be blocked
   for (int i = 0; i < 6; i++) {
     steppers[i].runSpeed();
   }
 
-  // Serial packet parsing
-  // Stepper packet: RobotNum, MotorNum(2), high, med, low, sign  → 6 bytes
-  // Servo packet:   RobotNum, MotorNum(1), high, low             → 4 bytes
-  while (Serial.available() >= 4) {
-    int robotNum = Serial.read();  // 1–6
-    int motorNum = Serial.read();  // 1 = servo, 2 = stepper
+  // Discard bytes until we see the 0xAA sync byte (resync on drift/noise)
+  while (Serial.available() > 0 && Serial.peek() != 0xAA) {
+    Serial.read();
+  }
 
-    // Validate robot index before using it
-    robotNum = robotNum - 1;  // convert 1-based to 0-based
-    if (robotNum < 0 || robotNum > 5) return;
+  // Wait until a full 7-byte packet is buffered before reading anything
+  if (Serial.available() < 7) return;
 
-    if (motorNum == 2) {
-      // Stepper — needs 4 more bytes
-      if (Serial.available() < 4) return;
-      int high = Serial.read();
-      int med  = Serial.read();
-      int low  = Serial.read();
-      int sign = Serial.read();
+  Serial.read();  // consume the 0xAA sync byte
 
-      int stepperSPS = (high << 16) | (med << 8) | low;
-      if (sign == 1) stepperSPS = -stepperSPS;
+  int robotNum = Serial.read() - 1;
+  int motorNum = Serial.read();
+  int b0       = Serial.read();
+  int b1       = Serial.read();
+  int b2       = Serial.read();
+  int b3       = Serial.read();
 
-      steppers[robotNum].setSpeed(stepperSPS);
-      if (printBool) {
-        Serial.print("Robot ");
-        Serial.print(robotNum + 1);
-        Serial.print(" | Stepper | SPS: ");
-        Serial.println(stepperSPS);
-      }
+  if (robotNum < 0 || robotNum > 5) return;
 
-    } else if (motorNum == 1) {
-      // Servo — needs 2 more bytes
-      if (Serial.available() < 2) return;
-      int high = Serial.read();
-      int low  = Serial.read();
+  if (motorNum == 2) {
+    int stepperSPS = (b0 << 16) | (b1 << 8) | b2;
+    if (b3 == 1) stepperSPS = -stepperSPS;
+    steppers[robotNum].setSpeed(stepperSPS);
+    Serial.print("Robot "); Serial.print(robotNum + 1);
+    Serial.print(" | Stepper | SPS: "); Serial.println(stepperSPS);
 
-      int servoAngle = ((high << 8) | low) - 1;
-
-      servos[robotNum].write(servoAngle);
-      
-      if (printBool) {
-      Serial.print("Robot ");
-      Serial.print(robotNum + 1);
-      Serial.print(" | Servo | Angle: ");
-      Serial.println(servoAngle);
-      }
-    }
+  } else if (motorNum == 1) {
+    int servoAngle = ((b0 << 8) | b1) - 1;
+    servos[robotNum].write(servoAngle);
+    Serial.print("Robot "); Serial.print(robotNum + 1);
+    Serial.print(" | Servo | Angle: "); Serial.println(servoAngle);
   }
 }
