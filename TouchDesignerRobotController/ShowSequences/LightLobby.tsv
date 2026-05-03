@@ -1,0 +1,10 @@
+time_start	duration	lights	brightness_start	r_start	g_start	b_start	brightness_end	r_end	g_end	b_end	easing
+475	25	all	0	0	0	0	255	160	0	255	ease
+500	15	all	255	160	0	255	255	255	0	0	ease
+515	15	all	255	255	0	0	255	160	0	255	ease
+530	15	all	255	160	0	255	255	255	0	0	ease
+545	15	all	255	255	0	0	255	160	0	255	ease
+560	15	all	255	160	0	255	255	255	0	0	ease
+575	15	all	255	255	0	0	255	160	0	255	ease
+590	15	all	255	160	0	255	255	255	0	0	ease
+595	5	all	255	255	0	0	0	0	0	0	ease

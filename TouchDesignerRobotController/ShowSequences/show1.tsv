@@ -1,0 +1,7 @@
+time_start	duration	fade	behavior	params_start	params_end
+0.0	2.0	0.0	sine	robot_mask=1,0,0,0,0,0
+2.0	2.0	0.0	sine	robot_mask=1,1,0,0,0,0
+4.0	2.0	0.0	sine	robot_mask=1,1,1,0,0,0
+6.0	2.0	0.0	sine	robot_mask=1,1,1,1,0,0
+8.0	2.0	0.0	sine	robot_mask=1,1,1,1,1,0
+10.0	2.0	0.0	sine	robot_mask=1,1,1,1,1,1

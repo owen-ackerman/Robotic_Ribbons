@@ -1,0 +1,37 @@
+time_start	duration	fade	behavior	params_start	params_end			
+0	0.05	0	zeroAll
+0.05	0.95	0	motor_homing
+1	.1	0.0	sine	robot_mask=0,0,0,0,0,0 phase_theta=0.0 theta_velocity=0 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=0 phase_theta=00				
+1.1	4.6	0.0	sine	robot_mask=0,0,0,0,0,1 theta_velocity=0.570 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=0 phase_theta=0				
+5.7	4.6	0.0	sine	robot_mask=0,0,0,0,1,1				
+10.3	4.6	0.0	sine	robot_mask=0,0,0,1,1,1				
+14.5	4.6	0.0	sine	robot_mask=0,0,1,1,1,1				
+19.0	4.6	0.0	sine	robot_mask=0,1,1,1,1,1				
+23.2	4.6	0.0	sine	robot_mask=1,1,1,1,1,1				
+28	72.5	0	sine	phase_theta=0.0	phase_theta=90.0 phase_shift=.2
+45	26	0	sine	theta_velocity=0.570	theta_velocity=0.76	
+71	27	0	sine	theta_velocity=0.76	theta_velocity=0.57	
+98	2.5	0	motor_homing	phi_target=na				
+100.5	50	0	sine	robot_mask=1,1,1,1,1,1 theta_velocity=0.7 frequency_phi=0.5 amplitude_phi=30 bias_phi=75 phase_shift=0 phase_theta=0	theta_velocity=0.78 frequency_phi=0.4 bias_phi=75 phase_shift=1 phase_theta=0			
+150.5	30	0	sine	theta_velocity=0.78 frequency_phi=0.4 bias_phi=85 phase_theta=0	theta_velocity=0.7 frequency_phi=0.5 bias_phi=85 phase_shift=0 phase_theta=0			
+187.5	5	0	sine	theta_velocity=0.7 frequency_phi=0.4 bias_phi=85 phase_theta=0	theta_velocity=.65 frequency_phi=0.2 bias_phi=75 phase_shift=0 phase_theta=0			
+232	5	0	sine	theta_velocity=0.65 frequency_phi=0 amplitude_phi=0 bias_phi=70 phase_shift=0 phase_theta=0	theta_velocity=0.65 frequency_phi=0.1 amplitude_phi=20 bias_phi=70 phase_shift=1.57 phase_theta=0			
+266	20	0	sine	theta_velocity=0.65 frequency_phi=0.1 amplitude_phi=20 bias_phi=70 phase_theta=0	theta_velocity=0.8 frequency_phi=0.2 bias_phi=70 phase_shift=.75 phase_theta=.75			
+288.5	.05	0	sine	theta_velocity=0.8	theta_velocity=-0.8			
+295	.05	0	sine	theta_velocity=-0.8	theta_velocity=0.8			
+302	.05	0	sine	theta_velocity=0.8	theta_velocity=-0.8		
+305	.05	0	sine	theta_velocity=-0.8	theta_velocity=0.8		
+320	5	0	sine	theta_velocity=0.8	theta_velocity=0.7	frequency_phi=0 phase_shift=0
+347	2	0	motor_homing
+349.64	2.36	0	sine	theta_velocity=0.6875 frequency_phi=0 amplitude_phi=0 bias_phi=90 phase_shift=0 phase_theta=0	
+352	30	0	figure8	frequency=0.5 amplitude_theta=75.0 amplitude_phi=30.0 bias_theta=90.0 bias_phi=90.0 phase_shift=0	phase_shift=0.4
+379	15	0	sine	theta_velocity=0.7 frequency_phi=0.5 amplitude_phi=40 bias_phi=90 phase_shift=0 phase_theta=1.57	
+394	5	0	sine	theta_velocity=0.7 frequency_phi=0.5 amplitude_phi=40 bias_phi=90 phase_shift=0 phase_theta=1.57	frequency_phi=0.5 phase_theta=0 
+399	15	0	sine	theta_velocity=0.7	theta_velocity=0.570	
+414	8	0.0	sine	robot_mask=0,1,1,1,1,1 theta_velocity=0.570 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=0 phase_theta=0	
+422	8	0.0	sine	robot_mask=0,0,1,1,1,1
+430	8	0.0	sine	robot_mask=0,0,0,1,1,1
+438	8	0.0	sine	robot_mask=0,0,0,0,1,1
+446	8	0.0	sine	robot_mask=0,0,0,0,0,1
+455	20	0.0	sine	robot_mask=0,0,0,0,0,0
+473	2	0	motor_homing

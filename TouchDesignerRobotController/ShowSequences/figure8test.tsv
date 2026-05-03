@@ -1,0 +1,4 @@
+time_start	duration	fade	behavior	params_start	params_end		
+0	2.5	0	motor_homing	phi_target=na			
+2.5	2.36	0.0	sine	theta_velocity=0.6875 frequency_phi=0 amplitude_phi=0 bias_phi=90 phase_shift=0 phase_theta=0	
+4.86	30	0	figure8	frequency=0.5 amplitude_theta=75.0 amplitude_phi=30.0 bias_theta=90.0 bias_phi=90.0 phase_shift=0	phase_shift=.4

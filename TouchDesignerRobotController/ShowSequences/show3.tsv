@@ -1,0 +1,2 @@
+time_start	duration	fade	behavior	params_start	params_end	
+0	10	0	sine	robot_mask=1,1,1,1,1,1 theta_velocity=0.7 frequency_phi=0.1 amplitude_phi=10 bias_phi=75 phase_shift=0 phase_theta=0		

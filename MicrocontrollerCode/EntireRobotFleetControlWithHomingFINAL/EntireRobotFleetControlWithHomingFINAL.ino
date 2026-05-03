@@ -7,29 +7,32 @@
 const int servoPins[6] = {2,  4,  6,  8,  10, 12};
 const int stepPins[6]  = {3,  5,  7,  9,  11, 13};
 const int dirPins[6]   = {26, 27, 28, 29, 32, 31};
-const int stepperDir[6] = {1, 1, -1, 1, 1, 1};  // flip index 2
+const int stepperDir[6] = {1, -1, 1, 1, 1, 1};  // flip index 2
 
 // Limit switch pins for each of the 6 steppers
 const int homingPins[6] = {33, 37, 41, 45, 49, 53};
 
 // ── Homing Config ────────────────────────────────────────────────────────────
-#define HOMING_SPEED 2000   // steps/sec
+#define HOMING_SPEED 350   // steps/sec
 #define HOMING_DIR   -1     // -1 or 1 depending on which direction homes
+
+#define HOMING_RSPEED 250   // steps/sec
+#define HOMING_RDIR   -1     // -1 or 1 depending on which direction homes
 
 // ── Motor Objects ────────────────────────────────────────────────────────────
 AccelStepper steppers[6] = {
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[0], dirPins[0]),
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[1], dirPins[1]),
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[2], dirPins[2]),
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[3], dirPins[3]),
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[4], dirPins[4]),
-  AccelStepper(AccelStepper::FULL2WIRE, stepPins[5], dirPins[5]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[0], dirPins[0]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[1], dirPins[1]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[2], dirPins[2]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[3], dirPins[3]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[4], dirPins[4]),
+  AccelStepper(AccelStepper::DRIVER, stepPins[5], dirPins[5]),
 };
 
 Servo servos[6];
 
 // ── Homing ───────────────────────────────────────────────────────────────────
-void homeAllSteppers() {
+int homeAllSteppers() {
   Serial.println("Homing sequence started...");
 
   // Detach servos during homing to prevent Timer 1 conflict with step pins 11/12/13
@@ -74,13 +77,72 @@ void homeAllSteppers() {
     }
   }
 
-  Serial.println("All steppers homed.");
+  // Re-attach servos and restore neutral position after homing is complete
+  for (int i = 0; i < 6; i++) {
+    servos[i].attach(servoPins[i]);
+    //servos[i].write(90);
+  }
+  
+  Serial.println("HOMED");
+  return 1;
+}
+
+
+// ── Homing ───────────────────────────────────────────────────────────────────
+int homeAllSteppersR() {
+
+  Serial.println("Homing sequence started...");
+
+  // Detach servos during homing to prevent Timer 1 conflict with step pins 11/12/13
+  for (int i = 0; i < 6; i++) {
+    servos[i].detach();
+  }
+
+  bool homed[6] = {false, false, false, false, false, false};
+
+  for (int i = 0; i < 6; i++) {
+    steppers[i].setSpeed(HOMING_RSPEED * HOMING_RDIR * stepperDir[i]);
+  }
+
+  // Run motors for 100ms before checking sensors so any stepper
+  // already sitting on a switch moves clear of it first
+  unsigned long backoffStart = millis();
+  while (millis() - backoffStart < 10) {
+    for (int i = 0; i < 6; i++) {
+      steppers[i].runSpeed();
+    }
+  }
+
+  Serial.println("Reading sensors now");
+
+  bool allHomed = false;
+  while (!allHomed) {
+    allHomed = true;
+
+    for (int i = 0; i < 6; i++) {
+      if (homed[i]) continue;
+
+      steppers[i].runSpeed();
+
+      // Sensors are active-low: LOW = triggered
+      if (digitalRead(homingPins[i]) == LOW) {
+        steppers[i].setSpeed(0);
+        steppers[i].setCurrentPosition(0);
+        homed[i] = true;
+      }
+
+      if (!homed[i]) allHomed = false;
+    }
+  }
 
   // Re-attach servos and restore neutral position after homing is complete
   for (int i = 0; i < 6; i++) {
     servos[i].attach(servoPins[i]);
-    servos[i].write(0);
+    //servos[i].write(90);
   }
+  
+  Serial.println("HOMED");
+  return 1;
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────
@@ -90,8 +152,8 @@ void setup() {
 
   for (int i = 0; i < 6; i++) {
     servos[i].attach(servoPins[i]);
-    servos[i].write(90);
-    steppers[i].setMaxSpeed(100000.0);
+    //servos[i].write(90);
+    steppers[i].setMaxSpeed(2400.0);
     steppers[i].setSpeed(0);
     pinMode(homingPins[i], INPUT);
   }
@@ -147,15 +209,28 @@ void loop() {
 
   // Validate after reading all bytes so nothing is left stranded in the buffer
   if (robotNum < 0 || robotNum > 5) return;
-  if (motorNum != 1 && motorNum != 2) return;
+  if (motorNum != 1 && motorNum != 2 && motorNum != 3) return;
 
   if (motorNum == 2) {
     int stepperSPS = (b0 << 16) | (b1 << 8) | b2;
     if (b3 == 1) stepperSPS = -stepperSPS;
+    if (robotNum == 0) {
+      Serial.print("Step speed ");
+      Serial.print(stepperSPS * stepperDir[robotNum]);
+      Serial.print(" /\  ");
+      }
     steppers[robotNum].setSpeed(stepperSPS * stepperDir[robotNum]);
 
   } else if (motorNum == 1) {
     int servoAngle = ((b0 << 8) | b1) - 1;
+    if (robotNum == 0) {
+      Serial.print("   Servo speed ");
+      Serial.print(servoAngle);
+      Serial.println(" /\  ");
+      }
     servos[robotNum].write(servoAngle);
+  }
+  else if (motorNum == 3) {
+    homeAllSteppersR();
   }
 }

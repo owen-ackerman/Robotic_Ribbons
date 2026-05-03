@@ -1,0 +1,8 @@
+time_start	duration	fade	behavior	params_start	params_end	
+0	2	0	motor_homing	
+2	8	0	sine	robot_mask=1,1,1,1,1,1 theta_velocity=0.7 frequency_phi=0.5 amplitude_phi=40 bias_phi=75 phase_shift=0 phase_theta=0	theta_velocity=0.78 frequency_phi=0.4 amplitude_phi=40 bias_phi=75 phase_shift=1 phase_theta=0		
+10	30	0	sine	theta_velocity=0.78 frequency_phi=0.4 amplitude_phi=40 bias_phi=75 phase_shift=1 phase_theta=0	theta_velocity=0.7 frequency_phi=0.5 amplitude_phi=40 bias_phi=75 phase_shift=0 phase_theta=0	
+40	5	0	sine	theta_velocity=0.7 frequency_phi=0.4 amplitude_phi=40 bias_phi=75 phase_shift=1 phase_theta=0	theta_velocity=.85 frequency_phi=0.6 amplitude_phi=40 bias_phi=75 phase_shift=0 phase_theta=0	
+25	5	0	sine	theta_velocity=0.85 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=0 phase_theta=0	theta_velocity=0.570 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=.4 phase_theta=0
+45	5	0	sine	theta_velocity=0.570 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=0 phase_theta=0	theta_velocity=0.9 frequency_phi=0 amplitude_phi=0 bias_phi=60 phase_shift=.3 phase_theta=0
+55	.05	0	sine	theta_velocity=-0.9	theta_velocity=0.9

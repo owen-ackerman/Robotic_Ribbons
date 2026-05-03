@@ -1,49 +1,35 @@
 class RobotEXT:
 	"""
 	State container for a single robot arm (theta stepper + phi servo).
-	Stores motor positions/velocities and outputs to a Constant CHOP for TouchDesigner.
+	theta is the single source of truth.
+	theta_velocity and pulse_per_sec are direct computations of it.
 	"""
 
 	def __init__(self, ownerComp):
 		self.ownerComp = ownerComp
 
-		# Motor state (spherical coordinates)
-		self.theta = 0.0   # Azimuth angle, degrees [0, 360)
-		self.phi   = 90.0  # Elevation angle, degrees [-135, 135]
-		self.theta_velocity      = 0.0
-		self.phi_velocity        = 0.0
-		self.prev_theta_velocity = 0.0
-		self.prev_phi_velocity   = 0.0
+		self.theta          = 0.0    # degrees [0, 360)
+		self.phi            = 90.0   # degrees [-135, 135]
+		self.theta_velocity = 0.0    # rps
+		self.phi_velocity   = 0.0    # deg/s
 
-		# Stepper resolution
-		self.pulses_per_revolution = 20000
-
-		# Bounds
-		self.min_theta, self.max_theta = 0.0, 360.0
-		self.min_phi,   self.max_phi   = -135.0, 135.0
-
-		# Velocity / acceleration limits
-		self.max_theta_velocity     = 250.0  # deg/s
-		self.max_phi_velocity       = 150.0  # deg/s
-		self.max_theta_acceleration = 100.0  # deg/s²
-		self.max_phi_acceleration   = 100.0  # deg/s²
+		self.pulses_per_revolution   = 800    # must match DM860 DIP switch setting
+		self.min_phi, self.max_phi   = -135.0, 135.0
+		self.max_theta_velocity      =   1.5   # rps  (1.5 rps)
+		self.max_phi_velocity        = 540.0   # deg/s (1.5 rps)
+		self.max_theta_acceleration  =   2.3   # rps/s  — 0 = unlimited
+		self.max_phi_acceleration    =   1.0   # deg/s² — 0 = unlimited
 
 	# -------------------------
 	# Getters
 	# -------------------------
-
-	def getTheta(self):
-		return self.theta
-
-	def getPhi(self):
-		return self.phi
 
 	def GetState(self):
 		return {
 			'theta':          self.theta,
 			'phi':            self.phi,
 			'theta_velocity': self.theta_velocity,
-			'pulse_per_sec':  (self.theta_velocity / 360.0) * self.pulses_per_revolution,
+			'pulse_per_sec':  self.theta_velocity * self.pulses_per_revolution,
 		}
 
 	# -------------------------
@@ -53,96 +39,64 @@ class RobotEXT:
 	def setPulsesPerRevolution(self, pulses):
 		self.pulses_per_revolution = pulses
 
-	def setThetaBounds(self, min_theta, max_theta):
-		self.min_theta, self.max_theta = min_theta, max_theta
-
 	def setPhiBounds(self, min_phi, max_phi):
 		self.min_phi, self.max_phi = min_phi, max_phi
 
-	def setMaxVelocity(self, max_velocity):
-		self.max_theta_velocity = max_velocity
-		self.max_phi_velocity   = max_velocity
+	def setMaxThetaVelocity(self, v):
+		self.max_theta_velocity = v
 
-	def setMaxThetaVelocity(self, max_velocity):
-		self.max_theta_velocity = max_velocity
+	def setMaxPhiVelocity(self, v):
+		self.max_phi_velocity = v
 
-	def setMaxPhiVelocity(self, max_velocity):
-		self.max_phi_velocity = max_velocity
+	def setMaxThetaAcceleration(self, a):
+		self.max_theta_acceleration = a
 
-	def setMaxAcceleration(self, max_acceleration):
-		self.max_theta_acceleration = max_acceleration
-		self.max_phi_acceleration   = max_acceleration
-
-	def setMaxThetaAcceleration(self, max_acceleration):
-		self.max_theta_acceleration = max_acceleration
-
-	def setMaxPhiAcceleration(self, max_acceleration):
-		self.max_phi_acceleration = max_acceleration
+	def setMaxPhiAcceleration(self, a):
+		self.max_phi_acceleration = a
 
 	# -------------------------
-	# Internal helpers
+	# State update
 	# -------------------------
-
-	@staticmethod
-	def _normalizeAngle(angle, wrap=360.0):
-		return angle % wrap
-
-	@staticmethod
-	def _shortestAngleDelta(target, source, wrap=360.0):
-		return ((target - source + wrap * 0.5) % wrap) - wrap * 0.5
-
-	@staticmethod
-	def _clamp(value, lo, hi):
-		return max(lo, min(hi, value))
-
-	# -------------------------
-	# State setters
-	# -------------------------
-
-	def setPosition(self, theta, phi):
-		self.theta = self._clamp(self._normalizeAngle(theta), self.min_theta, self.max_theta)
-		self.phi   = self._clamp(phi, self.min_phi, self.max_phi)
 
 	def SetState(self, theta, phi, ledMatrix, dt=None):
-		normalized_theta = self._normalizeAngle(theta)
+		prev_theta = self.theta
+		prev_phi   = self.phi
 
-		if dt is not None and dt > 0.0:
-			# Theta — velocity and acceleration limiting
-			tv = self._clamp(
-				self._shortestAngleDelta(normalized_theta, self.theta) / dt,
-				-self.max_theta_velocity, self.max_theta_velocity
-			)
-			ta = (tv - self.prev_theta_velocity) / dt
-			if abs(ta) > self.max_theta_acceleration:
-				ta = self._clamp(ta, -self.max_theta_acceleration, self.max_theta_acceleration)
-				tv = self.prev_theta_velocity + ta * dt
-			self.theta_velocity      = tv
-			self.prev_theta_velocity = tv
+		self.theta = theta % 360.0
+		self.phi   = max(self.min_phi, min(self.max_phi, phi))
 
-			# Phi — velocity and acceleration limiting
-			pv = self._clamp(
-				(phi - self.phi) / dt,
-				-self.max_phi_velocity, self.max_phi_velocity
-			)
-			pa = (pv - self.prev_phi_velocity) / dt
-			if abs(pa) > self.max_phi_acceleration:
-				pa = self._clamp(pa, -self.max_phi_acceleration, self.max_phi_acceleration)
-				pv = self.prev_phi_velocity + pa * dt
-			self.phi_velocity      = pv
-			self.prev_phi_velocity = pv
+		if dt and dt > 0.0:
+			delta_theta = ((self.theta - prev_theta + 180.0) % 360.0) - 180.0
+			raw_tv      = max(-self.max_theta_velocity, min(self.max_theta_velocity, delta_theta / dt / 360.0))
+			if self.max_theta_acceleration > 0.0:
+				max_dv = self.max_theta_acceleration * dt
+				raw_tv = self.theta_velocity + max(-max_dv, min(max_dv, raw_tv - self.theta_velocity))
+			self.theta_velocity = raw_tv
 
-		self.setPosition(normalized_theta, phi)
+			raw_pv = (self.phi - prev_phi) / dt
+			if self.max_phi_acceleration > 0.0:
+				max_dv = self.max_phi_acceleration * dt
+				raw_pv = self.phi_velocity + max(-max_dv, min(max_dv, raw_pv - self.phi_velocity))
+			self.phi_velocity = raw_pv
+		else:
+			self.theta_velocity = 0.0
+			self.phi_velocity   = 0.0
 
 	# -------------------------
 	# CHOP output
 	# -------------------------
 
+	def Halt(self):
+		"""Zero velocity and immediately push to CHOP. Safe to call from outside."""
+		self.theta_velocity = 0.0
+		self.phi_velocity   = 0.0
+		self.PushToCHOP()
+
 	def PushToCHOP(self):
-		"""Write theta, phi, and pulse_per_sec to the const_robot Constant CHOP."""
 		chop = self.ownerComp.op('const_robot')
 		if not chop:
 			return
-		pulse_per_sec = (self.theta_velocity / 360.0) * self.pulses_per_revolution
+		pulse_per_sec = -self.theta_velocity * self.pulses_per_revolution
 		chop.par.const0value = self.theta
 		chop.par.const1value = self.phi
 		chop.par.const2value = pulse_per_sec + 100000  # offset for serial protocol
