@@ -7,7 +7,7 @@
 const int servoPins[6] = {2,  4,  6,  8,  10, 12};
 const int stepPins[6]  = {3,  5,  7,  9,  11, 13};
 const int dirPins[6]   = {26, 27, 28, 29, 32, 31};
-const int stepperDir[6] = {1, -1, 1, 1, 1, 1};  // flip index 2
+const int stepperDir[6] = {-1, 1, 1, 1, 1, 1};  // flip index 2
 
 // Limit switch pins for each of the 6 steppers
 const int homingPins[6] = {33, 37, 41, 45, 49, 53};

@@ -32,6 +32,7 @@ class ShowLooperEXT:
         self._show_name       = 'final_show'
         self._light_show_name = 'final_light_show'  # Table DAT name for LightControllerEXT; None → uses light controller's default
         self._light_ambient_show_name = 'light_lobby'
+        #self._empty_sequencer = 'empty_sequencer'
         self._looper_time     = 0.0
         self._prev_wall       = None
         self._current_phase   = None  # 'homing' | 'playing' | 'cooling'

@@ -1,6 +1,6 @@
 def onValueChange(channel: Channel, sampleIndex: int, val: float, 
 				  prev: float):
-	lc = op('light_comp').ext.LightControllerEXT
+	lc = op('/project1/Robot_Controller/light_comp').ext.LightControllerEXT
 	if val > 255:
 		val = 255
 	r=op('const_rgb').par.value0
